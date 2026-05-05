@@ -1,22 +1,32 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import joblib
 import os
 
-# Page configuration
-st.set_page_config(page_title="Churn AI | Batch Predictor", layout="wide")
+import plotly.graph_objects as go
+from sklearn.metrics import precision_recall_curve
 
-# Custom CSS
+# ==========================================
+# PAGE CONFIG
+# ==========================================
+
+st.set_page_config(page_title="Churn AI | Interactive Simulator", layout="wide")
+
 st.markdown("""
     <style>
     .main { background-color: #f8f9fa; }
-    .stMetric { background-color: #ffffff; padding: 15px; border-radius: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+    .stMetric { background-color: #ffffff; padding: 15px;
+                border-radius: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
     </style>
-    """, unsafe_allow_html=True)
+""", unsafe_allow_html=True)
 
-st.title("📂 Customer Churn Batch Prediction")
+st.title("📊 Customer Churn AI – Live Decision Simulator")
 
-# Path handling
+# ==========================================
+# LOAD MODEL
+# ==========================================
+
 base_path = os.path.dirname(__file__)
 model_path = os.path.join(base_path, "..", "outputs", "model", "churn_pipeline.pkl")
 
@@ -24,90 +34,179 @@ model_path = os.path.join(base_path, "..", "outputs", "model", "churn_pipeline.p
 def load_model():
     return joblib.load(model_path)
 
-try:
-    pipeline = load_model()
-except Exception as e:
-    st.error(f"Error loading model: {e}")
+pipeline = load_model()
 
-# Sidebar
+# ==========================================
+# SIDEBAR
+# ==========================================
+
 with st.sidebar:
-    st.header("Help & Documentation")
-    st.write("Ensure your CSV includes the following columns:")
-    st.code("tenure, MonthlyCharges, Contract, PaperlessBilling, PaymentMethod...")
+    st.header("⚙️ How it works")
+    st.write("""
+    - Upload customer dataset  
+    - Adjust churn threshold live  
+    - Run prediction  
+    - See business impact instantly  
+    """)
     st.divider()
-    st.write("Built for Customer Success Teams")
+    st.write("📌 Model: RandomForest Pipeline")
+    st.write("📌 Purpose: Churn risk simulation tool")
 
-uploaded_file = st.file_uploader("Upload Customer Data (CSV format)", type="csv")
+# ==========================================
+# UPLOAD DATA
+# ==========================================
+
+uploaded_file = st.file_uploader("📂 Upload Customer Data (CSV)", type="csv")
+
+# ==========================================
+# LIVE THRESHOLD (IMPORTANT FIX)
+# ==========================================
+
+threshold = st.slider(
+    "🎛️ Churn Decision Threshold (Live Control)",
+    min_value=0.0,
+    max_value=1.0,
+    value=0.5,
+    step=0.01
+)
+
+# ==========================================
+# RUN ONLY IF FILE EXISTS
+# ==========================================
 
 if uploaded_file is not None:
+
     df = pd.read_csv(uploaded_file)
-    
-    st.subheader("1. Data Overview")
-    st.dataframe(df.head(5), use_container_width=True)
 
-    # ACTION BUTTON
+    st.subheader("1. Data Preview")
+    st.dataframe(df.head(), use_container_width=True)
+
     if st.button("🚀 Run Analysis"):
-        with st.spinner('Analyzing customer behavior...'):
-            try:
-                # 1. Feature Engineering logic
-                df_process = df.copy()
-                if 'TotalCharges' not in df_process.columns:
-                    df_process['TotalCharges'] = pd.to_numeric(df_process['MonthlyCharges'], errors='coerce') * pd.to_numeric(df_process['tenure'], errors='coerce')
-                
-                df_process['IsNewCustomer'] = (df_process['tenure'] < 12).astype(int)
-                df_process['AvgMonthlySpend'] = df_process['TotalCharges'] / (df_process['tenure'] + 1)
-                df_process['HighValueCustomer'] = (df_process['MonthlyCharges'] > 70.0).astype(int)
 
-                # 2. Prediction
-                probs = pipeline.predict_proba(df_process)[:, 1]
+        with st.spinner("Running churn prediction..."):
 
-                # 3. Create ALL Result Columns
-                df['Churn_Probability'] = (probs * 100).round(2)
-                df['Risk_Level'] = df['Churn_Probability'].apply(
-                    lambda x: 'High Risk' if x > 60 else ('Medium Risk' if x > 30 else 'Low Risk')
-                )
-                df['Display_Risk'] = df['Churn_Probability'].apply(
-                    lambda x: '🔴 High Risk' if x > 60 else ('🟡 Medium Risk' if x > 30 else '🟢 Low Risk')
+            df_process = df.copy()
+
+            # ==========================================
+            # FEATURE ENGINEERING (MATCH TRAINING)
+            # ==========================================
+
+            if 'TotalCharges' not in df_process.columns:
+                df_process['TotalCharges'] = (
+                    pd.to_numeric(df_process['MonthlyCharges'], errors='coerce') *
+                    pd.to_numeric(df_process['tenure'], errors='coerce')
                 )
 
-                # 4. Summary Metrics
-                st.subheader("2. Insights Summary")
-                m1, m2, m3 = st.columns(3)
-                m1.metric("Total Customers", len(df))
-                m2.metric("High Risk Alerts", len(df[df['Risk_Level'] == 'High Risk']))
-                m3.metric("Avg. Churn Prob.", f"{df['Churn_Probability'].mean():.1f}%")
+            df_process['IsNewCustomer'] = (df_process['tenure'] < 12).astype(int)
+            df_process['AvgMonthlySpend'] = df_process['TotalCharges'] / (df_process['tenure'] + 1)
+            df_process['HighValueCustomer'] = (df_process['MonthlyCharges'] > 70).astype(int)
 
-                # 5. Detailed Predictions with Styling
-                st.subheader("3. Detailed Predictions")
-                
-                def highlight_risk(row):
-                    # This now works because we style the whole DF before hiding columns
-                    if row['Risk_Level'] == 'High Risk':
-                        return ['background-color: #ffe5e5'] * len(row)
-                    return [''] * len(row)
+            # ==========================================
+            # PREDICTION
+            # ==========================================
 
-                # Apply styling to the WHOLE dataframe first
-                styled_df = df.style.apply(highlight_risk, axis=1)
+            probs = pipeline.predict_proba(df_process)[:, 1]
+            df['Churn_Probability'] = probs
 
-                # Define the order and which columns to actually SHOW
-                # We exclude 'Risk_Level' (plain text) because 'Display_Risk' (emoji) is better for UI
-                show_cols = ['Display_Risk', 'Churn_Probability'] + [c for c in df.columns if c not in ['Display_Risk', 'Churn_Probability', 'Risk_Level']]
-                
-                # Display only the selected columns, but using the styling we generated
-                st.dataframe(
-                    styled_df, 
-                    column_order=show_cols,
-                    width="stretch" 
-                )
+            # ==========================================
+            # THRESHOLD APPLICATION (LIVE)
+            # ==========================================
 
-                # 6. Clean Download (Strip UI columns)
-                export_df = df.drop(columns=['Display_Risk'])
-                csv = export_df.to_csv(index=False).encode('utf-8')
-                st.download_button(
-                    label="📥 Download Clean Report for Excel",
-                    data=csv,
-                    file_name='churn_predictions_report.csv',
-                    mime='text/csv',
-                )
-            except Exception as e:
-                st.error(f"Critical error during processing: {e}")
+            df['Predicted_Churn'] = (df['Churn_Probability'] >= threshold).astype(int)
+
+            df['Risk_Level'] = df['Predicted_Churn'].apply(
+                lambda x: "High Risk" if x == 1 else "Low Risk"
+            )
+
+            df['Display_Risk'] = df['Predicted_Churn'].apply(
+                lambda x: "🔴 High Risk" if x == 1 else "🟢 Low Risk"
+            )
+
+            # ==========================================
+            # METRICS
+            # ==========================================
+
+            st.subheader("📊 Live Business Impact")
+
+            flagged_pct = df['Predicted_Churn'].mean() * 100
+            avg_prob = df['Churn_Probability'].mean() * 100
+
+            c1, c2, c3 = st.columns(3)
+
+            c1.metric("Flagged Customers (%)", f"{flagged_pct:.1f}%")
+            c2.metric("Avg Churn Probability", f"{avg_prob:.1f}%")
+            c3.metric("Threshold", f"{threshold:.2f}")
+
+            # ==========================================
+            # PRECISION–RECALL CURVE
+            # ==========================================
+
+            st.subheader("📉 Precision–Recall Tradeoff")
+
+            precision, recall, thresholds = precision_recall_curve(
+                df['Predicted_Churn'],
+                df['Churn_Probability']
+            )
+
+            fig = go.Figure()
+
+            fig.add_trace(go.Scatter(
+                x=thresholds,
+                y=precision[:-1],
+                name="Precision",
+                line=dict(width=3)
+            ))
+
+            fig.add_trace(go.Scatter(
+                x=thresholds,
+                y=recall[:-1],
+                name="Recall",
+                line=dict(width=3)
+            ))
+
+            fig.add_vline(
+                x=threshold,
+                line_width=2,
+                line_dash="dash",
+                line_color="black"
+            )
+
+            fig.update_layout(
+                height=400,
+                xaxis_title="Threshold",
+                yaxis_title="Score",
+                title="Precision vs Recall Tradeoff"
+            )
+
+            st.plotly_chart(fig, use_container_width=True)
+
+            # ==========================================
+            # CUSTOMER TABLE
+            # ==========================================
+
+            st.subheader("👥 Customer Risk Table")
+
+            def highlight(row):
+                return [
+                    'background-color: #ffe5e5' if row['Predicted_Churn'] == 1 else ''
+                    for _ in row
+                ]
+
+            show_cols = ['Display_Risk'] + [c for c in df.columns if c != 'Display_Risk']
+            styled_df = df[show_cols].style.apply(highlight, axis=1)
+
+            st.dataframe(styled_df, use_container_width=True)
+
+            # ==========================================
+            # DOWNLOAD
+            # ==========================================
+
+            export_df = df.drop(columns=['Display_Risk'])
+            csv = export_df.to_csv(index=False).encode('utf-8')
+
+            st.download_button(
+                label="📥 Download Report",
+                data=csv,
+                file_name='churn_predictions_live.csv',
+                mime='text/csv'
+            )
